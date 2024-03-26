@@ -84,7 +84,7 @@
 	  data.hasDonation = hasDonation;
 	  data.membership = "";
 	  data.textonly = settings.textonlymode || false;
-	  data.type = "vklive";
+	  data.type = "vkplay";
 	  
 	  
 	  if (!chatmessage && !hasDonation){
