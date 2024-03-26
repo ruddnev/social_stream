@@ -20,6 +20,10 @@
   },
   "content_scripts": [
 	  {
+		  "js": ["vk.js"],
+		  "matches": ["https://vk.com/video/*", "https://vk.ru/video/*"]
+	  },
+	  {
 		  "js": ["chzzk.js"],
 		  "matches": ["https://chzzk.naver.com/live/*/chat"]
 	  },
