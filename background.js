@@ -35,6 +35,8 @@ function log(msg,msg2=null){
 	}
 }
 
+var priorityTabs = new Set();
+
 function generateStreamID(){
 	var text = "";
 	var possible = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
@@ -104,7 +106,6 @@ if (typeof(chrome.runtime)=='undefined'){
 	chrome.tabs.query = async function(a,callback){
 		var response = await ipcRenderer.sendSync('getTabs',{});
 		
-		
 		log("chrome.tabs.query");
 		log(response);
 		if (callback){
@@ -150,6 +151,12 @@ if (typeof(chrome.runtime)=='undefined'){
 	chrome.notifications = {};
 	chrome.notifications.create = function(data){
 		alert(data.message);
+	};
+	
+	window.showSaveFilePicker = async function(opts) {
+		const filePath = await ipcRenderer.invoke('show-save-dialog', opts);
+		console.log(filePath);
+		return filePath;
 	};
 	
 	var onMessageCallback = function(a,b,c){};
@@ -600,9 +607,13 @@ async function overwriteFile(data=false) {
 	  
 	  newFileHandle = await window.showSaveFilePicker(opts);
   } else if (newFileHandle && data){
-	  const writableStream = await newFileHandle.createWritable();
-	  await writableStream.write(data);
-	  await writableStream.close();
+	  if (typeof newFileHandle == "string"){
+		  ipcRenderer.send('write-to-file', { filePath: newFileHandle, data: data });
+	  } else {
+		  const writableStream = await newFileHandle.createWritable();
+		  await writableStream.write(data);
+		  await writableStream.close();
+	  }
   }
 }
 
@@ -625,9 +636,13 @@ async function overwriteSavedNames(data=false) {
   } else if (newSavedNamesFileHandle && data){
 	  if (uniqueNameSet.includes(data)){return;}
 	  uniqueNameSet.push(data);
-	  const writableStream = await newSavedNamesFileHandle.createWritable();
-	  await writableStream.write(uniqueNameSet.join("\r\n"));
-	  await writableStream.close();
+	  if (typeof newSavedNamesFileHandle == "string"){
+		  ipcRenderer.send('write-to-file', { filePath: newSavedNamesFileHandle, data: uniqueNameSet.join("\r\n") });
+	  } else {
+		  const writableStream = await newSavedNamesFileHandle.createWritable();
+		  await writableStream.write(uniqueNameSet.join("\r\n"));
+		  await writableStream.close();
+	  }
   }
 }
 
@@ -683,10 +698,14 @@ async function overwriteFileExcel(data=false) {
 		}
 		var xlsblob = new Blob([buffer], {type:"application/octet-stream"});
 		delete array; delete buffer; delete xlsbin;
-
-		const writableStream = await newFileHandleExcel.createWritable();
-		await writableStream.write(xlsblob);
-		await writableStream.close();
+ 
+		if (typeof newFileHandleExcel == "string"){
+			ipcRenderer.send('write-to-file', { filePath: newFileHandleExcel, data: xlsblob });
+		} else {
+			const writableStream = await newFileHandleExcel.createWritable();
+			await writableStream.write(xlsblob);
+			await writableStream.close();
+		}
 
 	} else if (newFileHandleExcel && data){
 
@@ -746,10 +765,13 @@ async function exportSettings(){
 		}
 		fileExportHandler = await window.showSaveFilePicker(opts);
 
-		const writableStream = await fileExportHandler.createWritable();
-		await writableStream.write(JSON.stringify(item));
-		await writableStream.close();
-
+		if (typeof fileExportHandler == "string"){
+			ipcRenderer.send('write-to-file', { filePath: fileExportHandler, data: JSON.stringify(item) });
+		} else {
+			const writableStream = await fileExportHandler.createWritable();
+			await writableStream.write(JSON.stringify(item));
+			await writableStream.close();
+		}
 	})
 }
 
@@ -1101,6 +1123,7 @@ async function getBTTVEmotes(url=false){
 
 chrome.runtime.onMessage.addListener(
     async function (request, sender, sendResponseReal) {
+		
 		var response = {};
 		var alreadySet=false;
 		function sendResponse(msg){
@@ -1114,6 +1137,13 @@ chrome.runtime.onMessage.addListener(
 		}
 		log("processing messge:",request);
 		try{
+			
+			if (typeof request !== "object"){
+				console.warn("Request type is not an object");
+				sendResponse({"state": isExtensionOn});
+				return;
+			}
+			
 			if (request.cmd && request.cmd === "setOnOffState") { // toggle the IFRAME (stream to the remote dock) on or off
 				isExtensionOn = request.data.value;
 				
@@ -1126,7 +1156,7 @@ chrome.runtime.onMessage.addListener(
 				
 			} else if (request.cmd && (request.cmd === "getSettings")) {
 				sendResponse({"state": isExtensionOn , "streamID":streamID, "password":password, "settings":settings});
-
+				
 			} else if (request.cmd && (request.cmd === "saveSetting")) {
 				
 				if (typeof settings[request.setting] == "object"){
@@ -1344,8 +1374,15 @@ chrome.runtime.onMessage.addListener(
 							});
 						}
 					}
+					// if ((request.setting == "viplistuserstoggle") || (request.setting == "viplistusers")){
+						// if (settings.viplistusers && settings.viplistuserstoggle){
+							// settings.viplistusers.textsetting.split(",").forEach(user=>{
+								// user = user.trim();
+								// sendToDestinations({"vipUser": {chatname:user}});
+							// });
+						// }
+					// }
 				}
-				
 			} else if ("inject" in request){
 				if (request.inject == "mobcrush"){
 					chrome.webNavigation.getAllFrames({tabId: sender.tab.id}, (frames) => {
@@ -1452,7 +1489,12 @@ chrome.runtime.onMessage.addListener(
 					}
 				} 
 			} else if ("getSettings" in request) { // forwards messages from Youtube/Twitch/Facebook to the remote dock via the VDO.Ninja API
-				sendResponse({"state":isExtensionOn,"streamID":streamID, "password":password, "settings":settings}); // respond to Youtube/Twitch/Facebook with the current state of the plugin; just as possible confirmation. 
+				sendResponse({"state":isExtensionOn,"streamID":streamID, "password":password, "settings":settings}); // respond to Youtube/Twitch/Facebook with the current state of the plugin; just as possible confirmation.
+				try {
+					priorityTabs.add(sender.tab.id);
+				} catch (e){
+					console.error(e);
+				}
 			} else if ("pokeMe" in request) { // forwards messages from Youtube/Twitch/Facebook to the remote dock via the VDO.Ninja API
 				sendResponse({"state":isExtensionOn}); // respond to Youtube/Twitch/Facebook with the current state of the plugin; just as possible confirmation. 
 				pokeSite(sender.tab.url,sender.tab.id);
@@ -1599,14 +1641,28 @@ chrome.runtime.onMessage.addListener(
 			} else if (request.cmd && request.cmd === "sidUpdated") {
 				if (request.streamID){
 					streamID = request.streamID;
+					if (isSSAPP){
+						if (chrome && chrome.storage && chrome.storage.sync && chrome.storage.sync.set){
+							chrome.storage.sync.set({
+								streamID: streamID || ""
+							});
+						}
+					}
 				}
 				if ("password" in request){
 					password = request.password;
+					if (isSSAPP){
+						if (chrome && chrome.storage && chrome.storage.sync && chrome.storage.sync.set){
+							chrome.storage.sync.set({
+								password: password || ""
+							});
+						}
+					}
 				}
 				
 				if ("state" in request){
 					isExtensionOn = request.state;
-				}
+				} 
 				if (iframe){
 					if (iframe.src){
 						iframe.src = null;
@@ -1618,7 +1674,8 @@ chrome.runtime.onMessage.addListener(
 				if (isExtensionOn){
 					loadIframe(streamID, password);
 				}
-
+				// isSSAPP
+				
 				sendResponse({"state":isExtensionOn});
 			} else {
 				sendResponse({"state":isExtensionOn});
@@ -2206,7 +2263,6 @@ async function openchat(target=null){
 		res = resolve;
 	});
 
-
 	chrome.tabs.query({}, function(tabs) { // tabs[i].url
 		if (chrome.runtime.lastError) {
 			console.warn(chrome.runtime.lastError.message);
@@ -2683,9 +2739,14 @@ async function downloadWaitlist(){
 	}
 	fileExportHandler = await window.showSaveFilePicker(opts);
 	var filesContent = objectArrayToCSV(waitlist,"\t");
-	const writableStream = await fileExportHandler.createWritable();
-	await writableStream.write(filesContent);
-	await writableStream.close();
+	
+	if (typeof fileExportHandler == "string"){
+		ipcRenderer.send('write-to-file', { filePath: fileExportHandler, data: filesContent });
+	} else {
+		const writableStream = await fileExportHandler.createWritable();
+		await writableStream.write(filesContent);
+		await writableStream.close();
+	}
 
 }
 
@@ -2847,6 +2908,62 @@ function processIncomingRequest(request, UUID=false){
 					if (isExtensionOn){ 
 						sendDataP2P({"userHistory": response}, UUID); 
 					}
+				});
+			}
+		} else if (request.action === "toggleVIPUser" && request.value && request.value.chatname && request.value.type){
+			// Initialize viplist settings if not present
+			if (!settings.viplistusers) {
+				settings.viplistusers = { textsetting: "" };
+			}
+
+			const viplist = settings.viplistusers.textsetting.split(",").map(user => {
+				const parts = user.split(":").map(part => part.trim());
+				return { username: parts[0], type: parts[1] || "*" };
+			});
+
+			const userToVIP = { username: request.value.chatname, type: request.value.type };
+			const isAlreadyVIP = viplist.some(({ username, type }) => 
+				userToVIP.username === username && (userToVIP.type === type || type === "*")
+			);
+
+			if (!isAlreadyVIP){
+				// Update viplist settings
+				settings.viplistusers.textsetting += (settings.viplistusers.textsetting ? "," : "") + userToVIP.username + ":" + userToVIP.type;
+				chrome.storage.local.set({ settings: settings });
+				// Check for errors in chrome storage operations
+				if (chrome.runtime.lastError) {
+					console.error("Error updating settings:", chrome.runtime.lastError.message);
+				}
+			}
+
+			if (isExtensionOn){ 
+				sendToDestinations({"vipUser": userToVIP});
+			}
+		} else if (request.action === "getChatSources"){
+			if (isExtensionOn && chrome.debugger){ 
+				chrome.tabs.query({}, function(tabs) { 
+					chrome.runtime.lastError;
+					var tabsList = [];
+					for (var i=0;i<tabs.length;i++){
+						try {
+							if (!tabs[i].url){continue;}
+							if (tabs[i].url.startsWith("https://socialstream.ninja/")){continue;}
+							if (tabs[i].url.startsWith("https://www.youtube.com/watch") && !tabs[i].url.includes("&socialstream")){continue;}
+							if (tabs[i].url.startsWith("https://twitch.tv") && !tabs[i].url.startsWith("https://twitch.tv/popout/")){continue;}
+							if (tabs[i].url.startsWith("https://www.twitch.tv") && !tabs[i].url.startsWith("https://www.twitch.tv/popout/")){continue;}
+							if (tabs[i].url.startsWith("file://") && tabs[i].url.includes("dock.html?")){continue;}
+							if (tabs[i].url.startsWith("file://") && tabs[i].url.includes("index.html?")){continue;}
+							if (tabs[i].url.startsWith("chrome-extension")){continue;}
+							if (tabs[i].id && priorityTabs.has(tabs[i].id)){
+								tabsList.unshift(tabs[i]);
+							} else {
+								tabsList.push(tabs[i]);
+							}
+						} catch(e){
+						}
+					}
+					
+					sendDataP2P({"tabsList": tabsList}, UUID); 
 				});
 			}
 		} else if (request.action === "blockUser" && request.value && request.value.chatname && request.value.type){
@@ -3163,14 +3280,27 @@ function processResponse(data, reverse=false, metadata=null){
 		for (var i=0;i<tabs.length;i++){
 			try {
 				if (("tid" in data) && (data.tid!==false)){ // if an action-response, we want to only respond to the tab that originated it
-					if (reverse){
-						if ( data.tid === tabs[i].id){
-							continue;
-						} else if (data.url && tabs[i].url && (data.url === tabs[i].url)){ // don't send to the exact same URL; not just the same tab, incase the tab is open twice accidentally.
+				
+					if (typeof data.tid == "object"){
+						
+						if (reverse){
+							if (data.tid.includes(tabs[i].id.toString())){
+								continue;
+							}
+						} else if (!data.tid.includes(tabs[i].id.toString())){
 							continue;
 						}
-					} else if ( data.tid !== tabs[i].id){
-						continue;
+						
+					} else {
+						if (reverse){
+							if ( data.tid === tabs[i].id){
+								continue;
+							} else if (data.url && tabs[i].url && (data.url === tabs[i].url)){ // don't send to the exact same URL; not just the same tab, incase the tab is open twice accidentally.
+								continue;
+							}
+						} else if ( data.tid !== tabs[i].id){
+							continue;
+						}
 					}
 				}
 				if (!tabs[i].url){continue;}
@@ -3630,6 +3760,22 @@ async function applyBotActions(data, tab=false){ // this can be customized to cr
 
 			if (isBlocked){
 				return null;
+			}
+		}
+		
+		if (settings.viplistuserstoggle && data.chatname && settings.viplistusers){
+			const viplist = settings.viplistusers.textsetting.split(",").map(user => {
+				const parts = user.toLowerCase().split(":").map(part => part.trim());
+				return { username: parts[0], type: parts[1] || "*" };
+			});
+
+			const isVIP = viplist.some(({ username, type }) => 
+				data.chatname.toLowerCase().trim() === username && 
+				(data.type === type || type === "*")
+			);
+
+			if (isVIP){
+				data.vip = true;
 			}
 		}
 		
@@ -6595,9 +6741,13 @@ function addMessageDB(message) {
 	if (settings.disableDB){
 		return;
 	}
-	const transaction = db.transaction([storeName], 'readwrite');
-	const store = transaction.objectStore(storeName);
-	const request = store.add({ ...message, timestamp: new Date() });
+	try {
+		const transaction = db.transaction([storeName], 'readwrite');
+		const store = transaction.objectStore(storeName);
+		const request = store.add({ ...message, timestamp: new Date() });
+	} catch(e){
+		
+	}
  // request.onsuccess = () => console.log('Message added to the database.');
  // request.onerror = e => console.error('Error adding message to the database: ', e.target.error);
 }
